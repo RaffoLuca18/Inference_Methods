@@ -35,8 +35,6 @@ def mask(J, t = 0.1):
 
     n_spins = J.shape[0]
     mask = (jnp.abs(J) >= t).astype(jnp.float32)
-    mask = mask * (1.0 - jnp.eye(n_spins))
-    mask = mask + jnp.eye(n_spins)
 
     return mask
 
@@ -345,3 +343,4 @@ def complete_experiment_noise(J, n_samples, method, use_tol=True):
     plt.colorbar(im, ax=ax, label="AUC")
     ax.set_title(f"AUC heatmap vs beta & n_samples ({method}, use_tol={bool(use_tol)})")
     plt.tight_layout(); plt.show()
+
