@@ -45,9 +45,6 @@ def mask(precision, t = 0.1):
 
 
 
-import jax.numpy as jnp
-import numpy as np
-
 def roc_prc(true_precision, hat_precision, thresholds=None):
     """ROC curve + AUC, PRC curve + AUC-PR, and PR baseline for edge selection"""
 
@@ -60,8 +57,8 @@ def roc_prc(true_precision, hat_precision, thresholds=None):
 
     # ---- PR baseline on upper triangle (avoid double counting) ----
     upper = jnp.triu(jnp.ones((n_spins, n_spins), dtype=jnp.float32), k=1)
-    P = jnp.sum(true_edges * upper)                       # #positivi (edges veri)
-    N = jnp.sum((1.0 - true_edges) * upper)               # #negativi (non-edges)
+    P = jnp.sum(true_edges * upper)          
+    N = jnp.sum((1.0 - true_edges) * upper) 
     pr_baseline = P / jnp.maximum(P + N, 1.0)
 
     # thresholds grid

@@ -128,106 +128,6 @@ def _csm_loss(h):
 
 
 
-def _reconstruct_single_spin2(s, freq, configs, method, lam, adj_row: Optional[jnp.ndarray], n_steps = 500,
-                            lr = 1e-2, record_history = True):
-    """
-    reconstructs row w_{s,·} for spin s
-    returns (w_full_final, history) where:
-      history[k] = w_full (np.ndarray, shape (num_spins,)) after k steps
-    """
-
-
-    # get counts and dimensionality
-    num_conf, num_spins = configs.shape
-    n_samples = freq.sum()
-    
-    # extract target spin column
-    y = configs[:, s]
-
-    # build nodal statistics y * x with self term kept as y
-    nodal_stat = (y[:, None] * configs).at[:, s].set(y).astype(jnp.float32)
-
-    # l1 mask: penalize all except the self index
-    l1_mask = jnp.ones(num_spins, dtype=jnp.float32).at[s].set(0.0)
-
-    # zero mask from adjacency: forbid edges where adj is zero
-    zero_mask = (
-        (adj_row == 0) & (jnp.arange(num_spins) != s)
-        if adj_row is not None
-        else jnp.zeros(num_spins, dtype=bool)
-    )
-
-    # free indices are those not hard-zeroed
-    free_idx = jnp.where(~zero_mask)[0]
-
-    # l1 mask restricted to free parameters
-    l1_mask_free = l1_mask[free_idx]
-
-    # smooth loss part per method (no l1 yet)
-    def loss_smooth(w_free):
-        # lift free vector to full size with zeros elsewhere
-        w_full = jnp.zeros(num_spins, dtype=jnp.float32).at[free_idx].set(w_free)
-
-        # local field for node s
-        h = nodal_stat @ w_full
-
-        # choose the nodewise objective
-        if method == "RISE":
-            return (freq / n_samples * _rise_loss(h)).sum()
-        elif method == "logRISE":
-            return jnp.log((freq / n_samples * _logrise_loss(h)).sum())
-        elif method == "RPLE":
-            return (freq / n_samples * _rple_loss(h)).sum()
-        elif method == "MPF":
-            return (freq / n_samples * _mpf_loss(h)).sum()
-        elif method == "CSM":
-            return (freq / n_samples * _csm_loss(h)).sum()
-        else:
-            # guard against typos
-            raise ValueError(f"unknown method: {method}")
-
-    # composite objective = smooth + l1 on free coords
-    def objective(w_free):
-        return loss_smooth(w_free) + lam * jnp.sum(l1_mask_free * jnp.abs(w_free))
-
-    # initialize free params to zero
-    params = jnp.zeros((free_idx.size,), dtype=jnp.float32)
-
-    # adam optimizer
-    optimizer = optax.adam(learning_rate=lr)
-    #optimizer = optax.sgd(learning_rate = lr)
-    opt_state = optimizer.init(params)
-
-    # optionally record iterates
-    history = []
-
-    # gradient steps
-    for t in range(1, n_steps + 1):
-        # value and gradient
-        val, grads = jax.value_and_grad(objective)(params)
-
-        # adam update
-        updates, opt_state = optimizer.update(grads, opt_state, params)
-        params = optax.apply_updates(params, updates)
-
-        # rebuild full vector and enforce hard zeros
-        w_full = jnp.zeros(num_spins, dtype=jnp.float32).at[free_idx].set(params)
-        if adj_row is not None:
-            w_full = w_full.at[zero_mask].set(0.0)
-
-        # save current iterate if requested
-        if record_history:
-            history.append(np.asarray(w_full))
-
-    # final full vector (post loop) with hard zeros
-    w_full_final = jnp.zeros(num_spins, dtype=jnp.float32).at[free_idx].set(params)
-    if adj_row is not None:
-        w_full_final = w_full_final.at[zero_mask].set(0.0)
-
-    # return final weights and history list
-    return w_full_final, history
-
-
 def _reconstruct_single_spin(s, freq, configs, method, lam, adj_row: Optional[jnp.ndarray],
                             n_steps = 500, lr = 1e-2, record_history = True):
     """
@@ -463,7 +363,7 @@ def _read_adjacency(adjacency_path, num_spins):
 
 
 def inverse_ising(method: str, regularizing_value, symmetrization, histogram,
-                adjacency_path = None, n_steps = 500, eps = 0.1, lr = 1e-2, record_history = True):
+                adjacency_path = None, n_steps = 500, eps = 0.1, lr = 1e-2, record_history = False):
     """ returns (W_np_finale, history) """
 
 

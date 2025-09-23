@@ -24,7 +24,7 @@ import jax.numpy as jnp
 
 
 
-def precision_maker(n_spins, p = 0.2, eps = 0.01, minval = 0.5, maxval = 1.0, seed = 0):
+def precision_maker(n_spins, p = 0.2, eps = 0.01, minval = -1.0, maxval = 1.0, seed = 0):
     """ to make precision matrix from a erdos-renyi graph """
 
     key = jax.random.PRNGKey(seed)

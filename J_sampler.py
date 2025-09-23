@@ -24,7 +24,7 @@ import jax.numpy as jnp
 
 
 
-def J_maker(n_spins, p = 0.2, eps = 0.01, minval = 0.5, maxval = 1.0, seed = 0):
+def J_maker(n_spins, p = 0.2, eps = 0.01, minval = -1.0, maxval = 1.0, seed = 0):
     """ making the J matrix from the erdos-renyi graph """
 
     key = jax.random.PRNGKey(seed)
@@ -233,3 +233,17 @@ def J_sampler_noise(n_samples, J, h, p=0.1, seed=0):
         samples = J_sampler(n_samples, J, h)
 
     return samples
+
+
+
+####################################################################################################
+
+
+def find_critical(J):
+    """" to find th ecritical beta, for a given J, and supposing that h = 0. """
+
+    lam_max = jnp.max(jnp.linalg.eigvalsh(J))
+
+    beta_c = 1/lam_max
+
+    return beta_c

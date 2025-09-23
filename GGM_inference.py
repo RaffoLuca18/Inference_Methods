@@ -281,6 +281,8 @@ def graphical_lasso(samples, lam = 0.1, lr = 1e-2,
 
 
     n_samples, n_spins = samples.shape
+    if lam is None:
+        lam = jnp.sqrt(jnp.log(n_spins)/n_samples)
 
     mean = jnp.mean(samples, axis=0)
     centered_samples = samples - mean
@@ -445,6 +447,8 @@ def graphical_score_matching(samples, lam = 0.1, max_sweeps = 100,
 
     samples = np.asarray(samples)
     n_samples, n_spins = samples.shape
+    if lam is None:
+        lam = jnp.sqrt(jnp.log(n_spins)/n_samples)
 
     # empirical covariance
     mean = samples.mean(axis=0)
@@ -675,7 +679,7 @@ def compute_energy_distance(samples, evolved_samples):
 def _jax_boltzmann_loss(precision, samples, lam=0.1, tau=1e-9):
     """ jax boltzmann loss function """
 
-    new_samples = GMM_sampler.precision_sampler(precision, len(samples))
+    new_samples = GGM_sampler.precision_sampler(precision, len(samples))
     smooth = compute_energy_distance(samples, new_samples)
 
     reg = _l1_offdiag(precision, lam, tau)
@@ -748,7 +752,7 @@ def _diag_boltzmann_loss(precision, samples, lam=0.1, tau=1e-9):
     """ diagonal boltzmann machine loss function """
 
 
-    new_samples = GMM_sampler.diag_generation(precision, len(samples))
+    new_samples = GGM_sampler.diag_generation(precision, len(samples))
     smooth = compute_energy_distance(samples, new_samples)
 
     reg = _l1_offdiag(precision, lam, tau)
@@ -810,12 +814,6 @@ def diag_boltzmann_machine(samples, lam=0.1, lr=1e-2,
     precision_hat = _symmetrize(precision)
 
     return precision_hat, history
-
-
-
-
-
-
 
 
 
