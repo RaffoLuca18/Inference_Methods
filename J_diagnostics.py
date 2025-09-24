@@ -127,7 +127,7 @@ def roc_prc(true_J, hat_J, thresholds=None):
 ####################################################################################################
 
 
-def complete_experiment(J, n_samples, method, use_tol=True):
+def complete_experiment(J, n_samples, method, use_tol=True, isingzation = False):
     """ full experiment """
 
     beta_c = J_sampler.find_critical(J)
@@ -151,16 +151,26 @@ def complete_experiment(J, n_samples, method, use_tol=True):
         h = jnp.diag(true_J)
 
         for j, n_samples in enumerate(samples_grid):
-            samples_n = J_sampler.J_sampler(n_samples, true_J, h)
+            if isingzation:
+                # samples_n = GGM_sampler.precision_sampler_sign(true_J, n_samples)
+                key = jax.random.PRNGKey(0)
+                bern = jax.random.bernoulli(key, p=0.5, shape=(n_samples, n_spins))
+                # mappiamo 0 -> -1, 1 -> +1
+                samples_n = 2 * bern.astype(jnp.int8) - 1
+            else:
+                samples_n = J_sampler.J_sampler(n_samples, true_J, h)
             histogram_n = J_sampler._samples_to_histogram(samples_n)
 
-            if method in ["RISE", "logRISE", "RPLE", "MPF", "CSM", "EMHT"]:
-                out, _ = J_inference.inverse_ising(method, 0.1, "Y", histogram_n)
+            if method in ["RISE", "logRISE", "RPLE", "MPF", "CSM", "EMHT", "RM"]:
+                out, _ = J_inference.inverse_ising(method, 0.1, "Y", histogram_n, n_steps = 200)
             else:
                 raise ValueError(f"Unknown method '{method}'")
 
             J_hat = out[0] if isinstance(out, tuple) else out
-            _2, _3, grid[i, j], _a, _b, grid_2[i, j], baseline = roc_prc(true_J, J_hat)
+            if isingzation:
+                _2, _3, grid[i, j], _a, _b, grid_2[i, j], baseline = roc_prc(true_J * (1 - jnp.eye(n_spins)), J_hat)
+            else:
+                _2, _3, grid[i, j], _a, _b, grid_2[i, j], baseline = roc_prc(true_J, J_hat)
 
     # indice di beta_c nella griglia
     idx_beta_c = np.argmin(np.abs(betas_grid - beta_c))
@@ -257,6 +267,8 @@ def complete_experiment_noise(J, n_samples, method, use_tol=True):
                 out, _ = J_inference.inverse_ising(method, 0.1, "Y", histogram_n)
 
             elif method == "EMHT":
+                out, _ = J_inference.inverse_ising(method, 0.1, "Y", histogram_n)
+            elif method == "RM":
                 out, _ = J_inference.inverse_ising(method, 0.1, "Y", histogram_n)
 
             else:

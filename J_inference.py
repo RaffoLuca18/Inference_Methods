@@ -119,6 +119,19 @@ def _csm_loss(h):
 
 
 ####################################################################################################
+
+
+
+def _rm_loss(h):
+    """
+        ...
+    """
+
+    return (1 / (1 + jnp.exp(2*h) ))**2
+
+
+
+####################################################################################################
 ####################################################################################################
 #                                                                                                  #
 # reconstruct single spin, no emht                                                                 #
@@ -185,6 +198,8 @@ def _reconstruct_single_spin(s, freq, configs, method, lam, adj_row: Optional[jn
             return _mpf_loss(h)
         elif method == "CSM":
             return _csm_loss(h)
+        elif method == "RM":
+            return _rm_loss(h)
         else:
             raise ValueError(f"unknown method: {method}")
 
@@ -219,6 +234,8 @@ def _reconstruct_single_spin(s, freq, configs, method, lam, adj_row: Optional[jn
 
         # value and gradient su mini-batch
         val, grads = jax.value_and_grad(objective_on_batch)(params, nodal_stat_batch)
+        if method == "CSM" and jnp.linalg.norm(grads) > 1e2:
+            grads = grads/jnp.linalg.norm(grads)
 
         # update
         updates, opt_state = optimizer.update(grads, opt_state, params)
@@ -239,6 +256,105 @@ def _reconstruct_single_spin(s, freq, configs, method, lam, adj_row: Optional[jn
         w_full_final = w_full_final.at[zero_mask].set(0.0)
 
     return w_full_final, history
+
+
+
+####################################################################################################
+
+
+
+def _reconstruct_single_spin2(
+    s,
+    freq,
+    configs,
+    method,
+    lam,
+    adj_row: Optional[jnp.ndarray],
+    n_steps: int = 50,
+    lr: float = 1e-2,
+    record_history: bool = True,
+):
+    """
+    Reconstruct row w_{s,·} for spin s using Adam (full dataset, no batching).
+    Returns (w_full_final, history).
+    """
+
+    num_conf, num_spins = configs.shape
+
+    # target spin
+    y = configs[:, s]
+    n_samples = freq.sum()
+
+    # nodal statistics y * x with self term kept as y
+    nodal_stat = (y[:, None] * configs).at[:, s].set(y).astype(jnp.float32)
+
+    # l1 mask
+    l1_mask = jnp.ones(num_spins, dtype=jnp.float32).at[s].set(0.0)
+
+    # adjacency hard zeros
+    zero_mask = (
+        (adj_row == 0) & (jnp.arange(num_spins) != s)
+        if adj_row is not None
+        else jnp.zeros(num_spins, dtype=bool)
+    )
+
+    # free indices (trainable)
+    free_idx = jnp.where(~zero_mask)[0]
+    l1_mask_free = l1_mask[free_idx]
+
+    is_logrise = (method == "logRISE")
+
+    # per-sample loss
+    def loss_smooth(w_free):
+        w_full = jnp.zeros(num_spins, dtype=jnp.float32).at[free_idx].set(w_free)
+        h = nodal_stat @ w_full
+        if method == "RISE":
+            return (freq / n_samples * _rise_loss(h)).sum()
+        elif method == "logRISE":
+            return jnp.log((freq / n_samples * _logrise_loss(h)).sum())
+        elif method == "RPLE":
+            return (freq / n_samples * _rple_loss(h)).sum()
+        elif method == "MPF":
+            return (freq / n_samples * _mpf_loss(h)).sum()
+        elif method == "RM":
+            return (freq / n_samples * _rm_loss(h)).sum()
+        else:
+            raise ValueError(f"unknown method: {method}")
+
+    # full loss (all data)
+    def objective(w_free):
+        return loss_smooth(w_free) + lam * jnp.sum(l1_mask_free * jnp.abs(w_free))
+
+    # initialize
+    params = jnp.zeros((free_idx.size,), dtype=jnp.float32)
+
+    # Adam optimizer
+    optimizer = optax.adam(learning_rate=lr)
+    opt_state = optimizer.init(params)
+
+    history = []
+
+    # optimization loop (full gradient)
+    for t in range(1, n_steps + 1):
+        val, grads = jax.value_and_grad(objective)(params)
+        updates, opt_state = optimizer.update(grads, opt_state, params)
+        params = optax.apply_updates(params, updates)
+
+        # reconstruct full vector
+        w_full = jnp.zeros(num_spins, dtype=jnp.float32).at[free_idx].set(params)
+        if adj_row is not None:
+            w_full = w_full.at[zero_mask].set(0.0)
+
+        if record_history:
+            history.append(np.asarray(w_full))
+
+    # final weights
+    w_full_final = jnp.zeros(num_spins, dtype=jnp.float32).at[free_idx].set(params)
+    if adj_row is not None:
+        w_full_final = w_full_final.at[zero_mask].set(0.0)
+
+    return w_full_final, history
+
 
 
 
@@ -363,7 +479,7 @@ def _read_adjacency(adjacency_path, num_spins):
 
 
 def inverse_ising(method: str, regularizing_value, symmetrization, histogram,
-                adjacency_path = None, n_steps = 500, eps = 0.1, lr = 1e-2, record_history = False):
+                adjacency_path = None, n_steps = 100, eps = 0.1, lr = 1e-2, record_history = False):
     """ returns (W_np_finale, history) """
 
 
