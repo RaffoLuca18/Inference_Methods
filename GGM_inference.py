@@ -30,7 +30,7 @@ import GGM_sampler
 
 
 def _soft_abs(x, tau = 1e-12):
-    """ to make the l1 loss differentiable in zero """
+    """ make the l1 loss differentiable in zero """
 
 
     abs = jnp.sqrt(x * x + tau * tau)
@@ -43,8 +43,21 @@ def _soft_abs(x, tau = 1e-12):
 
 
 
+def _soft(x, t):
+    """ soft thresholding """
+    
+
+    ax = np.abs(x)
+    return np.sign(x) * np.maximum(ax - t, 0.0)
+
+
+
+####################################################################################################
+
+
+
 def _symmetrize(matrix):
-    """ to symmetrize a matrix """
+    """ symmetrize a matrix """
 
 
     return 0.5 * (matrix + matrix.T)
@@ -55,8 +68,30 @@ def _symmetrize(matrix):
 
 
 
-def _l1_offdiag(matrix, lam, tau):
-    """ to calculate the l1 of a matrix, without considering the diagonal """
+def _symmetrize_minabs(matrix):
+    """ symmetrizing choosing, for each couple (i, j), the element with smallest abs """
+
+
+    A = np.asarray(matrix, dtype=float)
+    d = A.shape[0]
+    B = A.copy()
+    for i in range(d):
+        for j in range(i + 1, d):
+            a, b = A[i, j], A[j, i]
+            pick = a if abs(a) <= abs(b) else b
+            B[i, j] = pick
+            B[j, i] = pick
+
+    return _symmetrize(B)
+
+
+
+####################################################################################################
+
+
+
+def _l1_offdiag(matrix, lam = 0.1, tau = 1e-12):
+    """ calculate the l1 norm of a matrix, without considering the diagonal """
 
 
     n_spins = len(matrix[0])
@@ -70,8 +105,8 @@ def _l1_offdiag(matrix, lam, tau):
 
 
 
-def _project_to_pd(matrix, eps=1e-9):
-    """ take a matrix and project it onto the space of pd matrices """
+def _project_to_pd(matrix, eps = 1e-9):
+    """ projects the matrix onto the space of pd matrices """
 
 
     matrix = _symmetrize(matrix)
@@ -79,33 +114,6 @@ def _project_to_pd(matrix, eps=1e-9):
     delta = jnp.maximum(0.0, eps - lam_min)
 
     return matrix + delta * jnp.eye(matrix.shape[0], dtype=matrix.dtype)
-
-
-
-####################################################################################################
-
-
-
-def _to_np(x):
-    """ make the list an np array """
-
-
-    try:
-        return np.asarray(x)
-    except Exception:
-        return x
-    
-
-
-####################################################################################################
-
-
-
-def _to_jnp(x):
-    """ make the list a jax.numpy array """
-
-
-    return jnp.asarray(x)
 
 
 
@@ -120,7 +128,7 @@ def _to_jnp(x):
 
 
 def naive_mle(samples):
-    """ the complete algorithm of the naive MLE estimator """
+    """ returns the naive MLE estimator """
 
 
     n_samples = len(samples)
@@ -145,102 +153,7 @@ def naive_mle(samples):
 
 
 
-def _glasso_loss(precision, empirical_covariance, lam=0.1, tau=1e-9):
-    """ graphical lasso loss function """
-
-
-    precision = _symmetrize(precision)
-    sign, logdet = jnp.linalg.slogdet(precision)
-    #penalty = jnp.where(sign <= 0, 1e12, 0.0)
-    #smooth = -logdet + jnp.trace(empirical_covariance @ precision) + penalty
-    smooth = -logdet + jnp.trace(empirical_covariance @ precision)
-    reg = _l1_offdiag(precision, lam, tau)
-
-    return smooth + reg
-
-
-
-####################################################################################################
-
-
-
-def graphical_lasso_old(samples, lam=0.1, lr=1e-2,
-                              max_steps=1000, tol=1e-3,
-                              tau=1e-9, eps=1e-9,
-                              init_from_naive=True,
-                              use_tol = True):
-    """ projected algorithm for graphical lasso method """
-
-
-    n_samples, n_spins = samples.shape
-
-    mean = jnp.mean(samples, axis=0)
-    centered_samples = samples - mean
-    empirical_covariance = (centered_samples.T @ centered_samples) / n_samples
-
-    if init_from_naive:
-        precision0 = jnp.linalg.inv(empirical_covariance + eps * jnp.eye(n_spins))
-    else:
-        precision0 = jnp.eye(n_spins)
-
-    precision = precision0
-
-    def loss_fn(precision):
-        return _glasso_loss(precision, empirical_covariance, lam=lam, tau=tau)
-
-    optimizer = optax.adam(lr)
-    opt_state = optimizer.init(precision)
-
-    @jax.jit
-    def step(precision, opt_state):
-        loss, grads = jax.value_and_grad(loss_fn)(precision)
-        updates, opt_state = optimizer.update(grads, opt_state, params=precision)
-        precision_new = optax.apply_updates(precision, updates)
-        precision_new = _project_to_pd(precision_new, eps=eps)
-        upd_norm = jnp.linalg.norm(precision_new - precision)
-        return precision_new, opt_state, loss, upd_norm
-
-    history = [precision]
-    for _ in range(max_steps):
-        precision_new, opt_state, loss_value, upd = step(precision, opt_state)
-        history.append(precision_new)
-        if use_tol:
-            if upd < tol:
-                precision = precision_new
-                break
-        precision = precision_new
-
-    precision_hat = _symmetrize(precision)
-
-    return precision_hat, history
-
-
-
-####################################################################################################
-
-
-
-def graphical_lasso_sk(samples, lam=0.1, tol=1e-4, max_iter=100):
-    """ graphical lasso via scikit-learn """
-
-
-    samples = np.asarray(samples, dtype=np.float64)
-    n_samples = len(samples)
-    mean = np.mean(samples, axis = 0)
-    centered_samples = samples - mean
-    empirical_covariance = (centered_samples.T @ centered_samples) / n_samples
-    _, precision = skl_graphical_lasso(empirical_covariance, alpha=lam, tol=tol, max_iter=max_iter)
-
-    return precision
-
-
-
-####################################################################################################
-
-
-
-def solve_lasso_cd(W11, s12, lam,
-                   max_iter = 100, tol = 1e-3):
+def _solve_lasso_intermediate(W11, s12, lam = 0.1, max_iter = 100, tol = 1e-3):
     """ intermediate lasso solver """
 
 
@@ -274,10 +187,8 @@ def solve_lasso_cd(W11, s12, lam,
 
 
 
-def graphical_lasso(samples, lam = 0.1, lr = 1e-2,
-                    max_steps = 100, tol = 1e-3,
-                    tau = 1e-9, use_tol = True):
-    """ graphical lasso implemented with linear algebra operations """
+def graphical_lasso(samples, lam = 0.1, max_steps = 100, tol = 1e-3, use_tol = True):
+    """ graphical lasso algorithm """
 
 
     n_samples, n_spins = samples.shape
@@ -300,7 +211,7 @@ def graphical_lasso(samples, lam = 0.1, lr = 1e-2,
 
             W11 = current_cov[np.ix_(sub, sub)]
             s12 = empirical_covariance[sub, j]
-            beta = solve_lasso_cd(W11, s12, lam)
+            beta = _solve_lasso_intermediate(W11, s12, lam)
             w12 = W11 @ beta
             current_cov = current_cov.at[sub, j].set(w12)
             current_cov = current_cov.at[j, sub].set(w12)
@@ -319,6 +230,100 @@ def graphical_lasso(samples, lam = 0.1, lr = 1e-2,
 
 
 ####################################################################################################
+
+
+
+# def _glasso_loss(precision, empirical_covariance, lam=0.1, tau=1e-9):
+#     """ graphical lasso loss function """
+#
+#
+#     precision = _symmetrize(precision)
+#     sign, logdet = jnp.linalg.slogdet(precision)
+#     #penalty = jnp.where(sign <= 0, 1e12, 0.0)
+#     #smooth = -logdet + jnp.trace(empirical_covariance @ precision) + penalty
+#     smooth = -logdet + jnp.trace(empirical_covariance @ precision)
+#     reg = _l1_offdiag(precision, lam, tau)
+# 
+#     return smooth + reg
+
+
+
+####################################################################################################
+
+
+
+# def graphical_lasso_old(samples, lam=0.1, lr=1e-2,
+#                               max_steps=1000, tol=1e-3,
+#                               tau=1e-9, eps=1e-9,
+#                               init_from_naive=True,
+#                               use_tol = True):
+#     """ projected algorithm for graphical lasso method """
+#
+#
+#     n_samples, n_spins = samples.shape
+#
+#     mean = jnp.mean(samples, axis=0)
+#     centered_samples = samples - mean
+#     empirical_covariance = (centered_samples.T @ centered_samples) / n_samples
+# 
+#     if init_from_naive:
+#         precision0 = jnp.linalg.inv(empirical_covariance + eps * jnp.eye(n_spins))
+#     else:
+#         precision0 = jnp.eye(n_spins)
+#
+#     precision = precision0
+#
+#     def loss_fn(precision):
+#         return _glasso_loss(precision, empirical_covariance, lam=lam, tau=tau)
+#
+#     optimizer = optax.adam(lr)
+#     opt_state = optimizer.init(precision)
+#
+#     @jax.jit
+#     def step(precision, opt_state):
+#         loss, grads = jax.value_and_grad(loss_fn)(precision)
+#         updates, opt_state = optimizer.update(grads, opt_state, params=precision)
+#         precision_new = optax.apply_updates(precision, updates)
+#         precision_new = _project_to_pd(precision_new, eps=eps)
+#         upd_norm = jnp.linalg.norm(precision_new - precision)
+#         return precision_new, opt_state, loss, upd_norm
+#
+#     history = [precision]
+#     for _ in range(max_steps):
+#         precision_new, opt_state, loss_value, upd = step(precision, opt_state)
+#         history.append(precision_new)
+#         if use_tol:
+#             if upd < tol:
+#                 precision = precision_new
+#                 break
+#         precision = precision_new
+#
+#     precision_hat = _symmetrize(precision)
+#
+#     return precision_hat, history
+
+
+
+####################################################################################################
+
+
+
+# def graphical_lasso_sk(samples, lam=0.1, tol=1e-4, max_iter=100):
+#     """ graphical lasso via scikit-learn """
+#
+#
+#     samples = np.asarray(samples, dtype=np.float64)
+#     n_samples = len(samples)
+#     mean = np.mean(samples, axis = 0)
+#     centered_samples = samples - mean
+#     empirical_covariance = (centered_samples.T @ centered_samples) / n_samples
+#    _, precision = skl_graphical_lasso(empirical_covariance, alpha=lam, tol=tol, max_iter=max_iter)
+#
+#     return precision
+
+
+
+####################################################################################################
 ####################################################################################################
 #                                                                                                  #
 # graphical score matching lasso                                                                   #
@@ -328,89 +333,7 @@ def graphical_lasso(samples, lam = 0.1, lr = 1e-2,
 
 
 
-def _gsm_loss(precision, empirical_covariance, lam=0.1, tau=1e-9):
-    """ graphical score matching lasso loss function """
-
-
-    precision = _symmetrize(precision)
-    smooth = 0.5 * jnp.trace(empirical_covariance @ (precision @ precision)) - jnp.trace(precision)
-    reg = _l1_offdiag(precision, lam, tau)
-
-    return smooth + reg
-
-
-
-####################################################################################################
-
-
-
-def graphical_score_matching_old(samples, lam=0.1, lr=1e-2,
-                             max_steps=1000, tol=1e-3,
-                             tau=1e-9, init_from_naive=False, use_tol = True):
-    """ graphical score matching lasso complete algorithm """
-
-
-    n_samples, n_spins = samples.shape
-
-    mean = jnp.mean(samples, axis=0)
-    centered_samples = samples - mean
-    empirical_covariance = (centered_samples.T @ centered_samples) / n_samples
-
-    if init_from_naive:
-        precision0 = jnp.linalg.inv(empirical_covariance + 1e-9 * jnp.eye(n_spins))
-    else:
-        precision0 = jnp.eye(n_spins)
-
-    def loss_fn(precision):
-        return _gsm_loss(precision, empirical_covariance, lam=lam, tau=tau)
-
-    optimizer = optax.adam(lr)
-    opt_state = optimizer.init(precision0)
-
-    @jax.jit
-    def step(precision, opt_state):
-        loss, grads = jax.value_and_grad(loss_fn)(precision)
-        updates, opt_state = optimizer.update(grads, opt_state, params=precision)
-        new_precision = _symmetrize(optax.apply_updates(precision, updates))
-        return new_precision, opt_state, loss
-
-    precision = precision0
-    history = [precision]
-    for _ in range(max_steps):
-        precision_new, opt_state, loss_value = step(precision, opt_state)
-        history.append(precision_new)
-        upd_norm = jnp.linalg.norm(precision_new - precision)
-        precision = precision_new
-        if use_tol:
-            if upd_norm < tol:
-                print(_)
-                break
-
-    precision_hat = _symmetrize(precision)
-
-    return precision_hat, history
-
-
-
-####################################################################################################
-
-
-
-def _soft(x, t):
-    """ softing out """
-    
-
-    ax = np.abs(x)
-    return np.sign(x) * np.maximum(ax - t, 0.0)
-
-
-
-####################################################################################################
-
-
-
-def _solve_sm_l1_row(empirical_covariance_np, i, lam,
-                    beta0 = None, max_inner = 100, tol = 1e-3):
+def _solve_sm_l1_row(empirical_covariance_np, i, lam, beta0 = None, max_inner = 100, tol = 1e-3):
     """ intermediate optimization for score matching """
 
 
@@ -439,9 +362,7 @@ def _solve_sm_l1_row(empirical_covariance_np, i, lam,
 
 
 
-
-def graphical_score_matching(samples, lam = 0.1, max_sweeps = 100,
-                             inner_max = 100, tol = 1e-3):
+def graphical_score_matching(samples, lam = 0.1, max_sweeps = 100, inner_max = 100, tol = 1e-3):
     """ graphical score matching lasso with linear algebra elementary optimization """
 
 
@@ -475,6 +396,74 @@ def graphical_score_matching(samples, lam = 0.1, max_sweeps = 100,
 
 
 ####################################################################################################
+
+
+
+# def _gsm_loss(precision, empirical_covariance, lam=0.1, tau=1e-9):
+#    """ graphical score matching lasso loss function """
+#
+#
+#     precision = _symmetrize(precision)
+#     smooth = 0.5 * jnp.trace(empirical_covariance @ (precision @ precision)) - jnp.trace(precision)
+#     reg = _l1_offdiag(precision, lam, tau)
+#
+#     return smooth + reg
+
+
+
+####################################################################################################
+
+
+
+# def graphical_score_matching_old(samples, lam=0.1, lr=1e-2,
+#                              max_steps=1000, tol=1e-3,
+#                              tau=1e-9, init_from_naive=False, use_tol = True):
+#     """ graphical score matching lasso complete algorithm """
+#
+#
+#     n_samples, n_spins = samples.shape
+#
+#     mean = jnp.mean(samples, axis=0)
+#     centered_samples = samples - mean
+#     empirical_covariance = (centered_samples.T @ centered_samples) / n_samples
+#
+#     if init_from_naive:
+#         precision0 = jnp.linalg.inv(empirical_covariance + 1e-9 * jnp.eye(n_spins))
+#     else:
+#         precision0 = jnp.eye(n_spins)
+#
+#     def loss_fn(precision):
+#         return _gsm_loss(precision, empirical_covariance, lam=lam, tau=tau)
+#
+#     optimizer = optax.adam(lr)
+#     opt_state = optimizer.init(precision0)
+#
+#     @jax.jit
+#     def step(precision, opt_state):
+#         loss, grads = jax.value_and_grad(loss_fn)(precision)
+#         updates, opt_state = optimizer.update(grads, opt_state, params=precision)
+#         new_precision = _symmetrize(optax.apply_updates(precision, updates))
+#         return new_precision, opt_state, loss
+#
+#     precision = precision0
+#     history = [precision]
+#     for _ in range(max_steps):
+#         precision_new, opt_state, loss_value = step(precision, opt_state)
+#         history.append(precision_new)
+#         upd_norm = jnp.linalg.norm(precision_new - precision)
+#         precision = precision_new
+#         if use_tol:
+#             if upd_norm < tol:
+#                 print(_)
+#                 break
+#
+#     precision_hat = _symmetrize(precision)
+#
+#     return precision_hat, history
+
+
+
+####################################################################################################
 ####################################################################################################
 #                                                                                                  #
 # clime                                                                                            #
@@ -484,8 +473,8 @@ def graphical_score_matching(samples, lam = 0.1, max_sweeps = 100,
 
 
 
-def _clime_column(empirical_covariance, j, lam=0.1):
-    """ solves:   min ||beta||_1  s.t.  || S beta - e_j ||_inf <= lam
+def _clime_column(empirical_covariance, j, lam = 0.1):
+    """ solves:   min ||beta||_1  s.t.  || empirical_cov beta - e_j ||_inf <= lam
         via LP with variables beta = u - v, u, v >= 0 """
 
 
@@ -516,30 +505,8 @@ def _clime_column(empirical_covariance, j, lam=0.1):
 
 
 
-def _symmetrize_minabs(matrix):
-    """ symmetrizing choosing, for each couple (i, j), the element with smallest abs """
-
-
-    A = np.asarray(matrix, dtype=float)
-    d = A.shape[0]
-    B = A.copy()
-    for i in range(d):
-        for j in range(i + 1, d):
-            a, b = A[i, j], A[j, i]
-            pick = a if abs(a) <= abs(b) else b
-            B[i, j] = pick
-            B[j, i] = pick
-
-    return _symmetrize(B)
-
-
-
-####################################################################################################
-
-
-
-def clime(samples, lam=0.1):
-    """ clime algorithm for inference """
+def clime(samples, lam = 0.1):
+    """ clime algorithm """
 
 
     n_samples, n_spins = samples.shape
@@ -561,7 +528,6 @@ def clime(samples, lam=0.1):
 
 
 
-
 ####################################################################################################
 ####################################################################################################
 #                                                                                                  #
@@ -572,8 +538,8 @@ def clime(samples, lam=0.1):
 
 
 
-def _naive_boltzmann_loss(precision, empirical_covariance, lam=0.1, tau=1e-9):
-    """ graphical lasso loss function """
+def _naive_boltzmann_loss(precision, empirical_covariance, lam = 0.1, tau = 1e-9):
+    """ TO REVIEW """
 
     smooth = jnp.linalg.norm(jnp.linalg.inv(precision) - empirical_covariance)**2
     reg = _l1_offdiag(precision, lam, tau)
@@ -586,12 +552,8 @@ def _naive_boltzmann_loss(precision, empirical_covariance, lam=0.1, tau=1e-9):
 
 
 
-def naive_boltzmann_machine(samples, lam=0.1, lr=1e-2,
-                              max_steps=1000, tol=1e-3,
-                              tau=1e-9, eps=1e-9,
-                              init_from_naive=True,
-                              use_tol = True):
-    """ projected algorithm for graphical lasso method """
+def naive_boltzmann_machine(samples, lam = 0.1, lr = 1e-2, max_steps = 1000, tol = 1e-3, tau = 1e-9, eps = 1e-9, init_from_naive = True, use_tol = True):
+    """ TO REVIEW """
 
 
     n_samples, n_spins = samples.shape
@@ -643,7 +605,7 @@ def naive_boltzmann_machine(samples, lam=0.1, lr=1e-2,
 
 
 def compute_energy_distance(samples, evolved_samples):
-    """ computing energy distance between two empirical measures """
+    """ TO REVIEW """
 
 
     n = samples.shape[0]
@@ -677,7 +639,7 @@ def compute_energy_distance(samples, evolved_samples):
 
 
 def _jax_boltzmann_loss(precision, samples, lam=0.1, tau=1e-9):
-    """ jax boltzmann loss function """
+    """ TO REVIEW """
 
     new_samples = GGM_sampler.precision_sampler(precision, len(samples))
     smooth = compute_energy_distance(samples, new_samples)
@@ -697,7 +659,7 @@ def jax_boltzmann_machine(samples, lam=0.1, lr=1e-2,
                               tau=1e-9, eps=1e-9,
                               init_from_naive=True,
                               use_tol = True):
-    """ projected algorithm for jax boltzmann machine method """
+    """ TO REVIEW """
 
 
     n_samples, n_spins = samples.shape
@@ -749,7 +711,7 @@ def jax_boltzmann_machine(samples, lam=0.1, lr=1e-2,
 
 
 def _diag_boltzmann_loss(precision, samples, lam=0.1, tau=1e-9):
-    """ diagonal boltzmann machine loss function """
+    """ TO REVIEW """
 
 
     new_samples = GGM_sampler.diag_generation(precision, len(samples))
@@ -770,7 +732,7 @@ def diag_boltzmann_machine(samples, lam=0.1, lr=1e-2,
                               tau=1e-9, eps=1e-9,
                               init_from_naive=True,
                               use_tol = True):
-    """ projected algorithm for diagonal boltzmann machine method """
+    """ TO REVIEW """
 
 
     n_samples, n_spins = samples.shape
@@ -829,7 +791,7 @@ def diag_boltzmann_machine(samples, lam=0.1, lr=1e-2,
 
 
 def mle_covariance(samples, mask, seed = 0, eps = 1e-12, lam = 1e-1, lr = 1e-2, steps = 500):
-    """ simple optimization to reconstruct the mle of covariance given a mask on the precision matrix """
+    """ TO REVIEW """
 
 
     n_samples, n_spins = samples.shape

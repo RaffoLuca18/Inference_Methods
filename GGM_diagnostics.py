@@ -29,7 +29,7 @@ import GGM_sampler
 
 
 def mask(precision, t = 0.1):
-    """ masking everything under t to zero and everything above to one """
+    """ masking every abs whose entry is under t to zero and everything else to one """
 
 
     n_spins = precision.shape[0]
@@ -45,8 +45,8 @@ def mask(precision, t = 0.1):
 
 
 
-def roc_prc(true_precision, hat_precision, thresholds=None):
-    """ROC curve + AUC, PRC curve + AUC-PR, and PR baseline for edge selection"""
+def roc_prc(true_precision, hat_precision, thresholds = None):
+    """ ROC curve + AUC-ROX, PRC curve + AUC-PR, and PR baseline for edge selection """
 
     n_spins = true_precision.shape[0]
 
@@ -55,7 +55,6 @@ def roc_prc(true_precision, hat_precision, thresholds=None):
     true_edges = true_edges * (1.0 - jnp.eye(n_spins))
     true_edges = jnp.maximum(true_edges, true_edges.T)
 
-    # ---- PR baseline on upper triangle (avoid double counting) ----
     upper = jnp.triu(jnp.ones((n_spins, n_spins), dtype=jnp.float32), k=1)
     P = jnp.sum(true_edges * upper)          
     N = jnp.sum((1.0 - true_edges) * upper) 
@@ -99,7 +98,7 @@ def roc_prc(true_precision, hat_precision, thresholds=None):
     fpr = jnp.concatenate([jnp.array([0.0]), fpr, jnp.array([1.0])])
     tpr = jnp.concatenate([jnp.array([0.0]), tpr, jnp.array([1.0])])
 
-    # add PRC endpoints (precision=1 at recall=0 by convention)
+    # add PRC endpoints (precision=1 at recall = 0 by convention)
     precision = jnp.concatenate([jnp.array([1.0]), precision])
     recall = jnp.concatenate([jnp.array([0.0]), recall])
 
@@ -122,15 +121,15 @@ def roc_prc(true_precision, hat_precision, thresholds=None):
 ####################################################################################################
 ####################################################################################################
 #                                                                                                  #
-# copmlete experiment                                                                              #
+# complete experiment                                                                              #
 #                                                                                                  #
 ####################################################################################################
 ####################################################################################################
 
 
 
-def complete_experiment(precision, n_samples, method, use_tol=True):
-    """ full experiment """
+def complete_experiment(precision, n_samples, method, use_tol = True):
+    """ complete experiment, varying beta and n_samples """
 
     betas_grid = np.linspace(0.1, 3.0, 15, dtype=float)
     n_spins = int(precision.shape[0])
@@ -148,13 +147,13 @@ def complete_experiment(precision, n_samples, method, use_tol=True):
         for j, n_samples in enumerate(samples_grid):
             samples_n = GGM_sampler.precision_sampler(true_precision, n_samples)
 
-            if method == "mle":
+            if method == "MLE":
                 out = GGM_inference.naive_mle(samples_n)
-            elif method == "graphical_lasso":
+            elif method == "GLASSO":
                 out = GGM_inference.graphical_lasso(samples_n)
-            elif method == "graphical_score_matching":
+            elif method == "GSM":
                 out = GGM_inference.graphical_score_matching(samples_n)
-            elif method == "clime":
+            elif method == "CLIME":
                 out = GGM_inference.clime(samples_n)
             else:
                 raise ValueError(f"Unknown method '{method}'")
@@ -172,7 +171,7 @@ def complete_experiment(precision, n_samples, method, use_tol=True):
     axes[0].set_yticks(np.arange(len(betas_grid)))
     axes[0].set_yticklabels([f"{b:.1f}" for b in betas_grid])
     axes[0].set_ylabel("beta")
-    axes[0].set_title(f"AUC-ROC heatmap ({method}, use_tol={bool(use_tol)})")
+    axes[0].set_title(f"AUC-ROC heatmap ({method})")
     midbar = plt.colorbar(im1, ax=axes[0], label="AUC-ROC")
     midbar.ax.tick_params(labelsize=10)
 

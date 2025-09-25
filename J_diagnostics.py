@@ -44,17 +44,16 @@ def mask(J, t = 0.1):
 
 
 
-def roc_prc(true_J, hat_J, thresholds=None):
-    """ROC curve + AUC, PRC curve + AUC-PR, and PR baseline for edge selection"""
+def roc_prc(true_J, hat_J, thresholds = None):
+    """ ROC curve + AUC, PRC curve + AUC-PR, and PR baseline for edge selection """
+
 
     n_spins = true_J.shape[0]
 
-    # ground-truth edges (no self-loops, symmetrized)
     true_edges = (jnp.abs(true_J) > 1e-12).astype(jnp.float32)
     true_edges = true_edges * (1.0 - jnp.eye(n_spins))
     true_edges = jnp.maximum(true_edges, true_edges.T)
 
-    # ---- PR baseline on upper triangle (avoid double counting) ----
     upper = jnp.triu(jnp.ones((n_spins, n_spins), dtype=jnp.float32), k=1)
     P = jnp.sum(true_edges * upper)          
     N = jnp.sum((1.0 - true_edges) * upper) 
@@ -127,8 +126,10 @@ def roc_prc(true_J, hat_J, thresholds=None):
 ####################################################################################################
 
 
+
 def complete_experiment(J, n_samples, method, use_tol=True, isingzation = False):
-    """ full experiment """
+    """ full experiment, as beta and n_samples vary """
+
 
     beta_c = J_sampler.find_critical(J)
 
@@ -152,16 +153,12 @@ def complete_experiment(J, n_samples, method, use_tol=True, isingzation = False)
 
         for j, n_samples in enumerate(samples_grid):
             if isingzation:
-                # samples_n = GGM_sampler.precision_sampler_sign(true_J, n_samples)
-                key = jax.random.PRNGKey(0)
-                bern = jax.random.bernoulli(key, p=0.5, shape=(n_samples, n_spins))
-                # mappiamo 0 -> -1, 1 -> +1
-                samples_n = 2 * bern.astype(jnp.int8) - 1
+                samples_n = GGM_sampler.precision_sampler_sign(true_J, n_samples)
             else:
                 samples_n = J_sampler.J_sampler(n_samples, true_J, h)
             histogram_n = J_sampler._samples_to_histogram(samples_n)
 
-            if method in ["RISE", "logRISE", "RPLE", "MPF", "CSM", "EMHT", "RM"]:
+            if method in ["logRISE", "RPLE", "MPF", "EMHT", "RM"]:
                 out, _ = J_inference.inverse_ising(method, 0.1, "Y", histogram_n, n_steps = 200)
             else:
                 raise ValueError(f"Unknown method '{method}'")
@@ -172,7 +169,6 @@ def complete_experiment(J, n_samples, method, use_tol=True, isingzation = False)
             else:
                 _2, _3, grid[i, j], _a, _b, grid_2[i, j], baseline = roc_prc(true_J, J_hat)
 
-    # indice di beta_c nella griglia
     idx_beta_c = np.argmin(np.abs(betas_grid - beta_c))
 
     # plotting: two heatmaps (ROC on top, PR below)
@@ -183,13 +179,13 @@ def complete_experiment(J, n_samples, method, use_tol=True, isingzation = False)
     axes[0].set_xticks(np.arange(len(samples_grid)))
     axes[0].set_xticklabels(samples_grid)
     axes[0].set_yticks(np.arange(len(betas_grid)))
-    axes[0].set_yticklabels([f"{b:.1f}" for b in betas_grid])
+    axes[0].set_yticklabels([f"{b:.3f}" for b in betas_grid])
     axes[0].set_ylabel("beta")
     axes[0].set_title(f"AUC-ROC heatmap ({method}, use_tol={bool(use_tol)})")
     cbar1 = plt.colorbar(im1, ax=axes[0], label="AUC-ROC")
+    cbar1.ax.axhline(0.5, color="red", linewidth=5)
     cbar1.ax.tick_params(labelsize=10)
 
-    # linea rossa in corrispondenza di beta_c
     axes[0].hlines(idx_beta_c, xmin=-0.5, xmax=len(samples_grid)-0.5,
                    colors="red", linewidth=2)
 
@@ -213,7 +209,6 @@ def complete_experiment(J, n_samples, method, use_tol=True, isingzation = False)
     # baseline PR
     cbar2.ax.hlines(baseline, xmin=0.0, xmax=1.0, colors="red", linewidth=5, clip_on=False)
 
-    # linea rossa anche qui
     axes[1].hlines(idx_beta_c, xmin=-0.5, xmax=len(samples_grid)-0.5,
                    colors="red", linewidth=2)
 
@@ -233,7 +228,7 @@ def complete_experiment(J, n_samples, method, use_tol=True, isingzation = False)
 
 
 def complete_experiment_noise(J, n_samples, method, use_tol=True):
-    """ full experiment with sign sampler """
+    """ TO REVIEW """
 
 
     betas_grid = np.linspace(0.01, 3.0, 10, dtype=float)

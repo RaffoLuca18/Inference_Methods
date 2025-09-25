@@ -12,6 +12,8 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
+import GGM_inference
+
 
 
 ####################################################################################################
@@ -25,7 +27,8 @@ import jax.numpy as jnp
 
 
 def precision_maker(n_spins, p = 0.2, eps = 0.01, minval = -1.0, maxval = 1.0, seed = 0):
-    """ to make precision matrix from a erdos-renyi graph """
+    """ make a precision matrix whose structure reflects a erdos-renyi graph """
+
 
     key = jax.random.PRNGKey(seed)
     precision = jnp.zeros((n_spins, n_spins))
@@ -39,9 +42,7 @@ def precision_maker(n_spins, p = 0.2, eps = 0.01, minval = -1.0, maxval = 1.0, s
                 precision = precision.at[i, j].set(rnd)
                 precision = precision.at[j, i].set(rnd)
 
-    lambda_min = jnp.min(jnp.linalg.eigvalsh(precision))
-    if lambda_min < eps:
-        precision = precision + (eps - lambda_min) * jnp.eye(n_spins)
+    precision = GGM_inference._project_to_pd(precision, eps)
 
     return precision
 
@@ -50,18 +51,18 @@ def precision_maker(n_spins, p = 0.2, eps = 0.01, minval = -1.0, maxval = 1.0, s
 ####################################################################################################
 ####################################################################################################
 #                                                                                                  #
-# making the samples from the precision matrix                                                     #
+# sampling from mean-zero gaussians with the presceribed precision matrix                          #
 #                                                                                                  #
 ####################################################################################################
 ####################################################################################################
 
 
 
-def precision_sampler(precision, n_samples, beta = 1.0, seed = 0):
-    """ to sample the data points """
+def precision_sampler(precision, n_samples, seed = 0):
+    """ sample the data points from the mean-zero gaussian with the prescribed precision matrix """
+
 
     key = jax.random.PRNGKey(seed)
-    precision = precision * beta
     cov = jnp.linalg.inv(precision)
     n_spins = precision.shape[0]
     mean = jnp.zeros(n_spins)
@@ -75,11 +76,11 @@ def precision_sampler(precision, n_samples, beta = 1.0, seed = 0):
 
 
 
-def precision_sampler_sign(precision, n_samples, beta=1.0, seed=0):
-    """ sample sign vectors from gaussian with precision matrix """
+def precision_sampler_sign(precision, n_samples, seed = 0):
+    """ sample sign vectors from the mean-zero gaussian with the prescribed precision matrix, then transform -1 -> 0 """
+
 
     key = jax.random.PRNGKey(seed)
-    precision = precision * beta
     cov = jnp.linalg.inv(precision)
     n_spins = precision.shape[0]
     mean = jnp.zeros(n_spins)
@@ -92,7 +93,7 @@ def precision_sampler_sign(precision, n_samples, beta=1.0, seed=0):
     # take sign: {-1, +1}
     spin_samples = jnp.sign(samples)
 
-    # convention: replace 0 with +1 (just in case)
+    # convention: replace 0 with +1
     spin_samples = jnp.where(spin_samples == 0, 1, spin_samples)
 
     return spin_samples
@@ -103,9 +104,8 @@ def precision_sampler_sign(precision, n_samples, beta=1.0, seed=0):
 
 
 
-def precision_sampler_landau(precision, n_samples, beta=1.0, lam_q=0.0,
-                             step_size=1e-2, n_steps=1000, seed=0, record_history=False):
-    """ landaun-ginzburg samplers """
+def precision_sampler_landau(precision, n_samples, beta = 1.0, lam_q = 0.0, step_size = 1e-2, n_steps = 1000, seed = 0, record_history = False):
+    """ TO REVIEW """
 
 
     key = jax.random.PRNGKey(seed)
@@ -159,11 +159,9 @@ def precision_sampler_landau(precision, n_samples, beta=1.0, lam_q=0.0,
 
 
 
-def diag_generation(precision: jnp.ndarray,
-                    n_samples: int,
-                    seed: int = 0,
-                    jitter: float = 1e-9) -> jnp.ndarray:
-    """ to sample gaussians in the langevin matching framework """
+def diag_generation(precision, n_samples, seed = 0, jitter = 1e-9):
+    """ TO REVIEW """
+
 
     Theta = 0.5 * (precision + precision.T)
 

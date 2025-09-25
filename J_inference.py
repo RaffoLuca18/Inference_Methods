@@ -41,20 +41,21 @@ def _compute_lambda(alpha, n_spins, n_samples):
 ####################################################################################################
 ####################################################################################################
 #                                                                                                  #
-# loss functions                                                                                   #
+# loss functions written in spin-centric notation                                                  #
 #                                                                                                  #
 ####################################################################################################
 ####################################################################################################
 
 
 
-def _rise_loss(h):
+def _mpf_loss(h):
     """
-    rise loss: exp(-h)
+    l_mpf ∝ exp(-ΔE / 2) with ΔE = 2h in the node-centric notation,
+    hence exp(-h)
     """
 
 
-    return jnp.exp(-h)
+    return jnp.exp(-h)  # equivalent to rise when written per‑node
 
 
 
@@ -77,7 +78,6 @@ def _logrise_loss(h):
 
 
 
-
 def _rple_loss(h):
     """
     rple loss: log(1 + exp(-2h))
@@ -92,42 +92,13 @@ def _rple_loss(h):
 
 
 
-def _mpf_loss(h):
-    """
-    l_mpf ∝ exp(-ΔE / 2) with ΔE = 2h in the node-centric notation,
-    hence exp(-h)
-    """
-
-
-    return jnp.exp(-h)  # equivalent to rise when written per‑node
-
-
-
-####################################################################################################
-
-
-
-def _csm_loss(h):
-    """
-    l_csm ∝ exp(-2ΔE) - 2 exp(+ΔE) + 1
-    con ΔE = 2h, quindi exp(-4h) - 2 exp(2h) + 1
-    """
-
-
-    return jnp.exp(-4.0 * h) - 2.0 * jnp.exp(2.0 * h)
-
-
-
-####################################################################################################
-
-
-
 def _rm_loss(h):
     """
-        ...
+        g^2(exp(2 * h)), with g(t) = 1/(t + 1)
     """
 
-    return (1 / (1 + jnp.exp(2*h) ))**2
+
+    return (1/(1+jnp.exp(2 * h)))**2
 
 
 
@@ -141,19 +112,17 @@ def _rm_loss(h):
 
 
 
-def _reconstruct_single_spin(s, freq, configs, method, lam, adj_row: Optional[jnp.ndarray],
-                            n_steps = 500, lr = 1e-2, record_history = True):
+def _reconstruct_single_spin_SGD(s, freq, configs, method, lam, adj_row: Optional[jnp.ndarray], n_steps = 500, lr = 1e-2, record_history = False):
     """
-    reconstructs row w_{s,·} for spin s
-    returns (w_full_final, history) where:
-      history[k] = w_full (np.ndarray, shape (num_spins,)) after k steps
+    reconstructs row w_{s,·} for spin s using SGD
     """
+
 
     # get counts and dimensionality
     num_conf, num_spins = configs.shape
     n_samples = freq.sum()
 
-    # batch_sise
+    # batch size
     BATCH_SIZE = min(500, num_conf)
     REPLACE = True
     key = jax.random.PRNGKey(int(s))
@@ -161,7 +130,7 @@ def _reconstruct_single_spin(s, freq, configs, method, lam, adj_row: Optional[jn
     # extract target spin column
     y = configs[:, s]
 
-    # build nodal statistics y * x with self term kept as y
+    # build nodal statistics
     nodal_stat_full = (y[:, None] * configs).at[:, s].set(y).astype(jnp.float32)
 
     # l1 mask: penalize all except the self index
@@ -180,7 +149,7 @@ def _reconstruct_single_spin(s, freq, configs, method, lam, adj_row: Optional[jn
     # l1 mask restricted to free parameters
     l1_mask_free = l1_mask[free_idx]
 
-    # to sample batches
+    # auxiliary variables to sample batches
     probs = (freq / n_samples).astype(jnp.float32)
     is_logrise = (method == "logRISE")
 
@@ -188,16 +157,12 @@ def _reconstruct_single_spin(s, freq, configs, method, lam, adj_row: Optional[jn
     def per_sample_loss(w_free, nodal_stat_batch):
         w_full = jnp.zeros(num_spins, dtype=jnp.float32).at[free_idx].set(w_free)
         h = nodal_stat_batch @ w_full
-        if method == "RISE":
-            return _rise_loss(h)
+        if method == "MPF":
+            return _mpf_loss(h)
         elif method == "logRISE":
             return _logrise_loss(h)
         elif method == "RPLE":
             return _rple_loss(h)
-        elif method == "MPF":
-            return _mpf_loss(h)
-        elif method == "CSM":
-            return _csm_loss(h)
         elif method == "RM":
             return _rm_loss(h)
         else:
@@ -211,7 +176,7 @@ def _reconstruct_single_spin(s, freq, configs, method, lam, adj_row: Optional[jn
         else:
             return jnp.mean(vals)
 
-    # composite objective = smooth(batch) + l1 su free coords
+    # composite objective = smooth(batch) + l1 on free coordinates
     def objective_on_batch(w_free, nodal_stat_batch):
         smooth = batch_loss(w_free, nodal_stat_batch)
         return smooth + lam * jnp.sum(l1_mask_free * jnp.abs(w_free))
@@ -229,20 +194,18 @@ def _reconstruct_single_spin(s, freq, configs, method, lam, adj_row: Optional[jn
     # loop
     for t in range(1, n_steps + 1):
         key, k2 = jax.random.split(key)
-        idx = jax.random.choice(k2, num_conf, shape=(BATCH_SIZE,), p=probs, replace=REPLACE)
+        idx = jax.random.choice(k2, num_conf, shape = (BATCH_SIZE,), p = probs, replace = REPLACE)
         nodal_stat_batch = nodal_stat_full[idx, :]
 
         # value and gradient su mini-batch
         val, grads = jax.value_and_grad(objective_on_batch)(params, nodal_stat_batch)
-        if method == "CSM" and jnp.linalg.norm(grads) > 1e2:
-            grads = grads/jnp.linalg.norm(grads)
 
         # update
         updates, opt_state = optimizer.update(grads, opt_state, params)
         params = optax.apply_updates(params, updates)
 
         # reconstruction and adjacency matrix
-        w_full = jnp.zeros(num_spins, dtype=jnp.float32).at[free_idx].set(params)
+        w_full = jnp.zeros(num_spins, dtype = jnp.float32).at[free_idx].set(params)
         if adj_row is not None:
             w_full = w_full.at[zero_mask].set(0.0)
 
@@ -251,7 +214,7 @@ def _reconstruct_single_spin(s, freq, configs, method, lam, adj_row: Optional[jn
             history.append(np.asarray(w_full))
 
     # final full vector (post loop) with hard zeros
-    w_full_final = jnp.zeros(num_spins, dtype=jnp.float32).at[free_idx].set(params)
+    w_full_final = jnp.zeros(num_spins, dtype = jnp.float32).at[free_idx].set(params)
     if adj_row is not None:
         w_full_final = w_full_final.at[zero_mask].set(0.0)
 
@@ -263,21 +226,11 @@ def _reconstruct_single_spin(s, freq, configs, method, lam, adj_row: Optional[jn
 
 
 
-def _reconstruct_single_spin2(
-    s,
-    freq,
-    configs,
-    method,
-    lam,
-    adj_row: Optional[jnp.ndarray],
-    n_steps: int = 50,
-    lr: float = 1e-2,
-    record_history: bool = True,
-):
+def _reconstruct_single_spin_ADAM(s, freq, configs, method, lam, adj_row: Optional[jnp.ndarray], n_steps = 500, lr = 1e-2, record_history = False):
     """
-    Reconstruct row w_{s,·} for spin s using Adam (full dataset, no batching).
-    Returns (w_full_final, history).
+    Reconstruct row w_{s,·} for spin s using Adam (full dataset, no batching)
     """
+
 
     num_conf, num_spins = configs.shape
 
@@ -285,7 +238,7 @@ def _reconstruct_single_spin2(
     y = configs[:, s]
     n_samples = freq.sum()
 
-    # nodal statistics y * x with self term kept as y
+    # nodal statistics
     nodal_stat = (y[:, None] * configs).at[:, s].set(y).astype(jnp.float32)
 
     # l1 mask
@@ -308,14 +261,12 @@ def _reconstruct_single_spin2(
     def loss_smooth(w_free):
         w_full = jnp.zeros(num_spins, dtype=jnp.float32).at[free_idx].set(w_free)
         h = nodal_stat @ w_full
-        if method == "RISE":
-            return (freq / n_samples * _rise_loss(h)).sum()
+        if method == "MPF":
+            return (freq / n_samples * _mpf_loss(h)).sum()
         elif method == "logRISE":
             return jnp.log((freq / n_samples * _logrise_loss(h)).sum())
         elif method == "RPLE":
             return (freq / n_samples * _rple_loss(h)).sum()
-        elif method == "MPF":
-            return (freq / n_samples * _mpf_loss(h)).sum()
         elif method == "RM":
             return (freq / n_samples * _rm_loss(h)).sum()
         else:
@@ -357,22 +308,19 @@ def _reconstruct_single_spin2(
 
 
 
-
 ####################################################################################################
 ####################################################################################################
 #                                                                                                  #
-# reconstruct single spin, emht                                                                    #
+# reconstruct single spin with emht                                                                #
 #                                                                                                  #
 ####################################################################################################
 ####################################################################################################
 
 
 
-def _reconstruct_single_spin_em(s, freq, configs, eps = 0.01, lam = 0.1, adj_row: Optional[jnp.ndarray] = None,
-                                n_steps = 500, lr = 0.1, record_history = True):
+def _reconstruct_single_spin_em(s, freq, configs, eps = 0.01, lam = 0.1, adj_row: Optional[jnp.ndarray] = None, n_steps = 500, lr = 1e-2, record_history = False):
     """
-    em single-spin: returns (w_final, history_list)
-    history_list[k] = w_full after k steps
+    erasure machine version of the previous function, using ADAM
     """
 
 
@@ -383,10 +331,10 @@ def _reconstruct_single_spin_em(s, freq, configs, eps = 0.01, lam = 0.1, adj_row
     # target spin column
     y = configs[:, s]
 
-    # nodewise statistics: y * x, self-term equals y
+    # nodewise statistics
     nodal_stat = (y[:, None] * configs).at[:, s].set(y).astype(jnp.float32)
 
-    # hard-zero mask from adjacency (exclude self)
+    # hard-zero mask from adjacency
     zero_mask = (
         (adj_row == 0) & (jnp.arange(num_spins) != s)
         if adj_row is not None
@@ -467,7 +415,7 @@ def _reconstruct_single_spin_em(s, freq, configs, eps = 0.01, lam = 0.1, adj_row
 
 
 def _read_adjacency(adjacency_path, num_spins):
-    """ to be implemented """
+    """ TO REVIEW """
 
 
     return None
@@ -478,9 +426,8 @@ def _read_adjacency(adjacency_path, num_spins):
 
 
 
-def inverse_ising(method: str, regularizing_value, symmetrization, histogram,
-                adjacency_path = None, n_steps = 100, eps = 0.1, lr = 1e-2, record_history = False):
-    """ returns (W_np_finale, history) """
+def inverse_ising(method: str, regularizing_value, symmetrization, histogram, adjacency_path = None, n_steps = 500, eps = 0.1, lr = 1e-2, record_history = False):
+    """ returns the inferred matrix J """
 
 
     method = method.strip()
@@ -524,7 +471,7 @@ def inverse_ising(method: str, regularizing_value, symmetrization, histogram,
         for s in range(num_spins):
             print(f"[{s+1}/{num_spins}] reconstruction spin {s}")
             adj_row = adj[s] if adj is not None else None
-            w_row_final, hist_row = _reconstruct_single_spin(
+            w_row_final, hist_row = _reconstruct_single_spin_ADAM(
                 s, freq, configs, method, lam, adj_row,
                 n_steps=n_steps, lr=lr,
                 record_history=record_history,
@@ -548,6 +495,5 @@ def inverse_ising(method: str, regularizing_value, symmetrization, histogram,
     W_np = np.asarray(W)
 
     history = {int(k): np.asarray(v) for k, v in W_snapshots.items()}
-    return W_np, history
 
-    
+    return W_np, history
