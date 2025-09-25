@@ -220,24 +220,27 @@ def J_sampler_noise(n_samples, J, h, p = 0.1, seed = 0):
     key = jax.random.PRNGKey(seed)
     n = J.shape[0]
 
-    batches = n_samples
     J = (J > 0).astype(jnp.int8)
     J = jnp.triu(J, 1)
     J = (J + J.T).astype(jnp.int8)
 
     configs = jnp.arange(2 ** n, dtype=jnp.uint32)
     spins   = _int_to_spin(configs, n)
+    samples = []
 
-    for _ in range(batches):
+    for _ in range(n_samples):
         key, kmask = jax.random.split(key)
+        key, k_3 = jax.random.split(key)
+        s = int(jax.random.uniform(key, minval=0.0, maxval=n_samples))
         mask_up = jax.random.bernoulli(kmask, p=p, shape=(n, n))
         mask_up = jnp.triu(mask_up, 1)
 
         J_up = jnp.triu(J, 1)
         J_up_flipped = jnp.bitwise_xor(J_up, mask_up.astype(J_up.dtype))
 
-        J = (J_up_flipped + J_up_flipped.T).astype(jnp.int8)
+        J_out = (J_up_flipped + J_up_flipped.T).astype(jnp.int8)
+        # print(J_out, "\n\n")
 
-        samples = J_sampler(n_samples, J, h)
+        samples.append(J_sampler(1, J_out, h, seed = s))
 
-    return samples
+    return jnp.vstack(samples)
